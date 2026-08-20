@@ -38,6 +38,20 @@ Kimi Code 底层子智能体只有三种类型，但**角色靠委派 prompt 注
 | **文档员** writer | `coder` | 写文档、README、注释、commit message、PR 描述 | — | 不实现逻辑，只写内容 |
 | **调试员** debugger | `coder` | 修 bug：先找根因，再最小修复，验证后收尾 | — | 不允许"试错式"乱改 |
 
+### 角色可调用工具（工具白名单）
+
+底层类型决定工具上限（`explore`/`plan` 天然没有写工具，`coder` 全量），角色纪律决定怎么用。委派时把对应角色的工具边界一并写进 prompt：
+
+| 角色 | 允许调用 | 明确禁止 | 说明 |
+|------|---------|---------|------|
+| **调研员** | `Read`、`Glob`、`Grep`、`Bash`（仅只读命令）、`WebSearch`、`FetchURL` | `Write`、`Edit` | 只读探索，摸清现状 |
+| **规划师** | `Read`、`Glob`、`Grep`、`WebSearch`、`FetchURL` | `Write`、`Edit`、`Bash` | 纯只读规划，不跑命令 |
+| **编码员** | `Read`、`Write`、`Edit`、`Grep`、`Glob`、`Bash`、`Skill`、`TodoList`、`TaskList`、`WebSearch`、`FetchURL` | 纪律禁止：不碰任务外文件 | 唯一能改文件/跑命令的角色 |
+| **测试员** | 同编码员 | 纪律禁止：不顺手改业务逻辑 | 写测试、补覆盖、跑验证 |
+| **评审员** | `Read`、`Glob`、`Grep`、`Bash`（仅只读命令） | `Write`、`Edit` | 只读评审，绝不改文件 |
+| **文档员** | `Read`、`Write`、`Edit`、`Grep`、`Glob`、`Skill` | 纪律禁止：不实现逻辑 | 只写文档类内容 |
+| **调试员** | 同编码员 | 纪律禁止：试错式乱改 | 先找根因再最小修复 |
+
 ### 分工者的能力库（技能挂载）
 
 角色除了底层类型，还能**携带技能**——委派时在 prompt 里注明"加载 XXX 技能"，子智能体即可用对应能力干活（用 `Skill` 工具加载）。五个已装技能挂载如下：
