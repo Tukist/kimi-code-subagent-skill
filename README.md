@@ -39,7 +39,7 @@ Kimi Code 底层子智能体只有三种类型（`explore` / `plan` / `coder`）
 |------|---------|------|-----------|---------|
 | **调研员** investigator | `explore` | 摸清现状：定位文件、读懂逻辑、找出根因线索 | `improve-codebase-architecture`（架构深化分析） | 只读，不改任何文件 |
 | **规划师** planner | `plan` | 出实施方案：拆步骤、比较方案、预估风险 | `grill-me`（拷问方案）、`to-spec`（产出规格）、`to-tickets`（拆 tickets） | 只读，不实现 |
-| **编码员** coder | `coder` | 写代码、改代码、跑验证 | `tdd`（测试先行） | 不做全局规划，只做派给的那件事 |
+| **编码员** coder | `coder` | 写代码、改代码、跑验证 | `tdd`（测试先行）、`implement`（按 spec/tickets 实现，含测试闭环） | 不做全局规划，只做派给的那件事 |
 | **测试员** tester | `coder` | 写测试、补覆盖、跑测试并报结果 | `tdd`（红绿循环纪律） | 不顺手改业务逻辑 |
 | **评审员** reviewer | `explore` 或 `plan` | 只读评审：正确性/清晰度/可维护性/一致性 | — | 绝不修改文件 |
 | **文档员** writer | `coder` | 写文档、README、注释、commit message、PR 描述 | — | 不实现逻辑，只写内容 |
@@ -71,6 +71,7 @@ Kimi Code 底层子智能体只有三种类型（`explore` / `plan` / `coder`）
 | `to-spec` | 规划师 | 需求已讨论清楚，需要把它综合成 spec/PRD 发布到 issue tracker | 委派 prompt 写明"用 to-spec 产出 spec" |
 | `to-tickets` | 规划师、主智能体 | 有方案/spec 后，拆成 tracer-bullet vertical slices，声明 ticket 阻塞关系 | 委派 prompt 写明"用 to-tickets 拆 tickets" |
 | `tdd` | 编码员、测试员 | 任何"写代码/写测试"任务，默认都应走红→绿循环，测试先行 | 委派 prompt 写明"按 tdd 纪律实施" |
+| `implement` | 编码员 | 按 spec/tickets 实现完整工作：用 tdd 写测试、常跑类型检查/单测、最后跑全量测试套件，完成后交给评审 | 委派 prompt 写明"用 implement 流程执行" |
 | `improve-codebase-architecture` | 调研员 | 要扫描架构找深化机会（深模块/浅模块、seam、adapter），产出报告 | 委派 prompt 写明"用 improve-codebase-architecture 扫描并出报告" |
 
 > **注意**：`to-spec`、`to-tickets` 依赖项目的 issue tracker（`docs/agents/issue-tracker.md`）。若项目没有，先跑 `/setup-matt-pocock-skills` 建立，否则这两个技能无法发布/拆单。
