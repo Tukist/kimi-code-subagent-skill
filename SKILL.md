@@ -1,6 +1,7 @@
 ---
 name: subagent
-description: Decompose a task into specialized, isolated sub-agents drawn from a role library (investigator/planner/coder/tester/reviewer/writer/debugger) and delegate all execution to them — the main agent only plans, delegates, and reports results, never executes itself. Use when a task is big enough to split, when contexts risk getting polluted, or when multiple workstreams could collide.
+description: |
+  Decompose a task into specialized, isolated sub-agents drawn from a role library (investigator/planner/coder/tester/reviewer/writer/debugger) and delegate all execution to them — the main agent only plans, delegates, and reports results, never executes itself. Every sub-agent is spawned asynchronously (run_in_background: true); the main agent never waits on a spawn. Use when a task is big enough to split, when contexts risk getting polluted, or when multiple workstreams could collide.
 ---
 
 # subagent — 主智能体只分工，执行全交专业子智能体
@@ -70,7 +71,7 @@ Kimi Code 底层子智能体只有三种类型，但**角色靠委派 prompt 注
 ### 角色委派模板（选角时把这段"角色定义"注入 prompt 开头）
 
 ```
-你是【编码员 coder】子智能体，由主智能体委派，只负责完成下面这一件事。
+你是【编码员 coder】子智能体，由主智能体异步委派（后台运行，`run_in_background: true`），只负责完成下面这一件事。完成后结果自动回传主智能体，不需要等待任何后续指令。
 
 ## 职责边界
 - 只处理委派的任务，不做全局规划、不碰任务外的文件
@@ -117,8 +118,8 @@ Kimi Code 底层子智能体只有三种类型，但**角色靠委派 prompt 注
 
 1. **拆任务**——把需求拆成可独立验证的块
 2. **选角**——每块从角色库选一个角色
-3. **委派**——用五段式格式 + 角色定义派出去
-4. **等回传**——收到全部结果前不决策
+3. **委派**——用五段式格式 + 角色定义，一律 `run_in_background: true` 异步派出去（拿 task_id 立刻走，不 await、不 poll）
+4. **等回传**——收到全部 `<notification>` 前不决策；每条通知按 `source_id` 关联回对应任务
 5. **汇报**——汇总给用户：谁干了什么、验证是否通过、遗留问题
 
 主智能体绝不自己编辑文件、跑命令。它只有读工具 + Agent 委派工具 + 规划能力。
@@ -146,20 +147,20 @@ Kimi Code 底层子智能体只有三种类型，但**角色靠委派 prompt 注
 
 以"把认证中间件重构为 async/await"为例：
 
-1. 派**调研员**：找出认证中间件位置、现状、依赖、现有测试
-2. 派**规划师**：基于调研结果出重构步骤，列出受影响文件
-3. 派**编码员**：按方案实现重构
-4. 派**测试员**：为重构后的代码补测试并跑通
-5. 派**评审员**：评审改动，给出阻断问题/建议
-6. 有阻断问题 → 派**编码员**修复 → 再评审；无阻断 → 派**文档员**更新相关文档
+1. 派**调研员**（后台）：找出认证中间件位置、现状、依赖、现有测试
+2. 收到调研通知 → 派**规划师**（后台）：基于调研结果出重构步骤，列出受影响文件
+3. 收到规划通知 → 派**编码员**（后台）：按方案实现重构
+4. 收到编码通知 → 派**测试员**（后台）：为重构后的代码补测试并跑通
+5. 收到测试通知 → 派**评审员**（后台）：评审改动，给出阻断问题/建议
+6. 有阻断问题 → 收到通知后派**编码员**修复 → 再评审；无阻断 → 派**文档员**更新相关文档
 7. 主智能体汇总全部回传，向用户汇报
 
-第 3~5 步可视为一条流水线；每个角色独立上下文，只有主智能体掌握全局。
+第 3~5 步可视为一条流水线；每个角色独立上下文，只有主智能体掌握全局。流水线的每一步都走「异步派发 → 等 `<notification>` → 派下一步」，主智能体不在任何一步前台等待。
 
 ## 并行 vs 串行
 
-- **并行**：多个任务互不依赖、不碰同一批文件 → 同一消息里发多个 `Agent` 调用（或同角色多输入用 `AgentSwarm`）
-- **串行**：后一个任务依赖前一个的结果（如流水线）→ 等前一个回传后再派
+- **并行**：多个任务互不依赖、不碰同一批文件 → 同一消息里发多个 `Agent` 调用（全部 `run_in_background: true`，或同角色多输入用 `AgentSwarm`）
+- **串行**：后一个任务依赖前一个的结果（如流水线）→ 前一个也异步派发，收到它的 `<notification>` 后再派下一个（用 `Agent(resume=agent_id, ...)` 或新 spawn）
 - **禁止**：多个子智能体并发改同一个文件
 
 ## 子智能体如何向你提问（问题回传机制）
@@ -195,13 +196,80 @@ Kimi Code 底层子智能体只有三种类型，但**角色靠委派 prompt 注
 - 交互型技能（如 grill-me）在**主智能体层**直接对你跑更自然——拷问本身是一轮轮问答。委派给子智能体时，让它把问题**批量打包**回传（列成清单），不要一问一停。
 - 同一轮转述不超过一批问题；每个问题都要有"影响"说明，方便你判断值不值得回答。
 
+## 异步派发与进度追踪
+
+参考 Kimi Code 的 `Agent` 工具实现（`subagent-host.ts` + `BackgroundManager` + `AgentBackgroundTask`），异步子智能体有三个独立维度：
+
+1. **派发（spawn）**：主智能体发任务出去，立刻拿到 `task_id`（调度层一次性）和 `agent_id`（子智能体实例持久 id）
+2. **追踪（track）**：主智能体能查到子智能体的当前状态 / 累计输出
+3. **回传（notify）**：子智能体完成 / 失败 / 丢失时，结果自动注入主智能体的下一轮
+
+### 异步派发：拿 task_id 就走（所有派发的默认方式）
+
+本 skill 的**所有**子 agent 委派一律调用 `run_in_background: true`（或你自己的等价标记）异步派发，主智能体立刻拿到返回：
+
+```
+task_id: t_001
+status: running
+agent_id: a_xyz
+actual_subagent_type: coder
+description: ...
+resume_hint: Agent(resume="a_xyz", prompt="...")
+```
+
+**主智能体的纪律**：拿到 task_id 后立即返回上层流程，**不要 await 完成、不要 poll**。继续处理用户下一条消息 / 派发其他独立子智能体。
+
+### 回传：`<notification>` 自动注入
+
+子智能体完成（或失败 / 丢失）时，主智能体框架应在其**下一轮 turn 开头**注入一条 `<notification>` 块（参见 Kimi Code 的 `BackgroundTaskNotification` 注入路径）：
+
+```
+<notification type="task.completed" source_id="t_001" agent_id="a_xyz">
+[子智能体的 summary]
+</notification>
+```
+
+主智能体看到这条通知，按 `source_id` 关联到之前那个 task，处理结果（汇报给用户 / 衔接下一步流程）。
+
+### 追踪：主智能体怎么"读在途子智能体进度"
+
+**默认不去主动读**子智能体的 transcript。这跟进程内存一样会撞锁、会读到中间态、会让子智能体的 tool-loop 跟你的读互相打架。三个可选：
+
+1. **共享进度文件**：子智能体每一步完成后把"我刚才做了什么 / 下一步要做什么"append 到一个主智能体知道的文件（如 `progress/<agent_id>.md`）。主智能体需要时用 `Read` 主动查——这就是"翻 session 日志"的对应物，但走文件系统，避开内存锁。
+2. **resume 续问**：用 `Agent(resume=agent_id, prompt="汇报当前进度")` 把问题塞回去，子智能体读自己的 transcript 回答。这是 Kimi Code 推荐的方式。
+3. **TaskOutput(task_id)**（如框架提供）：一次性读子智能体累计输出，**仅在排查异常 / 卡死时用**，正常流程不要走这条。
+
+### resume 用什么 id
+
+**`task_id` ≠ `agent_id`**：
+
+| id | 性质 | 用途 |
+|---|---|---|
+| `task_id` | 任务调度层（BackgroundManager），子智能体跑完即消亡 | 关联 `<notification>`、查输出 |
+| `agent_id` | 子智能体实例持久 id | resume 续上下文、查 profile |
+
+要继续跟子智能体对话 → 用 `Agent(resume="a_xyz", prompt="...")`（agent_id）。
+错误地用 task_id resume 会被框架拒绝（"agent not found"）。
+
+## /btw 模式 —— 旁支提问（不是读子智能体进度）
+
+如果用户突然问个旁支问题（跟当前任务无关、又不想打断主任务），派一个**镜像模式**的子智能体（参见 Kimi Code `SessionSubagentHost.startBtw()`）：
+
+- 复制主智能体的 `system_prompt` + 模型 + 工具集（但所有写类工具**全禁**——`DenyAllPermissionPolicy`）
+- 共享主智能体的历史（`context.useProjectedHistoryFrom(parent.context)`）——让 btw 能看到主智能体看过的内容
+- 加一句 system reminder 告诉它"你是轻量子，只用文本回答，工具都关了"
+- btw 答完即丢，不持久化（`InMemoryAgentRecordPersistence`）
+
+**注意**：`/btw` **不是**"主智能体读子智能体在做什么"的机制——它解决的是**用户问旁支问题时不打断主任务**。要读在途子智能体的进度，走上面「异步派发与进度追踪」里的方式。
+
 ## 细节纪律
 
 - **委派时给足上下文**：子智能体看不到本会话历史，只拿到你写的那段 prompt——角色定义、路径、背景、要求全部写进去，别让它猜。
-- **用 resume 延续**：同一任务的后续步骤（如"给刚才的改动补测试"）用 `resume` 恢复原子智能体，保留其上下文，不要重新起一个。
-- **后台运行**：不阻塞主流程的独立任务可 `run_in_background`，主智能体继续其他工作，完成后再回传。
+- **用 resume 续上下文**：同一智能体的后续步骤（如"给刚才的改动补测试"）用 `resume=agent_id`（**不是 task_id**）恢复原子智能体，保留其上下文，不要重新起一个。
+- **异步派发（默认，不再前台等待）**：所有子 agent 一律 `run_in_background: true` 派发，拿 task_id 立刻走。框架会在子智能体完成 / 失败 / 丢失时往主智能体下一轮 turn 开头注入一条 `<notification>`（带 `source_id` 关联回 task）。**主智能体不要 await、不要 poll**；需要结果就等通知到了再衔接，绝不在派发那一步前台阻塞。详见上一节。
 - **不重复劳动**：委派出去的任务，主智能体在同一轮里不要再自己搜一遍 / 做一遍，等回传即可。
-- **超时处理**：子智能体超时未回 → 用 `TaskOutput` 查状态，必要时 `TaskStop` 终止或 resume 续跑，别静默重派。
+- **超时处理**：子智能体超时未回 → 用 `TaskOutput` 读累计输出排查，必要时 `TaskStop` 终止或 `Agent(resume=agent_id, ...)` 续跑，别静默重派。
+- **btw 不是查询子智能体进度的工具**：用户问"子智能体干到哪了"时不要派 btw，要用 TaskOutput / resume / 共享进度文件。
 
 ## 何时不用本 skill
 
